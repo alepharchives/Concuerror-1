@@ -619,7 +619,7 @@ state_load() ->
         '$end_of_table' -> no_state;
         State ->
             ets:delete(?NT_STATE1, State),
-            State
+            state:pack(State)
     end.
 
 %% Return a state without removing it.
