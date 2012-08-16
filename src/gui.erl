@@ -41,6 +41,8 @@ start() ->
     ref_start(),
     %% Set initial file load path (used by the module addition dialog).
     ref_add(?FILE_PATH, ""),
+    %% Set initial loaded files to empty list
+    ref_add(?LOADED_FILES, []),
     %% Load preferences from file or if not found, load defaults.
     loadPrefs(),
     snapshot_init(),
@@ -52,7 +54,7 @@ start() ->
     _ = log:attach(?MODULE, wx:get_env()),
     %% Start the replay server.
     loop(),
-    snapshot_cleanup(),
+    snapshot:cleanup(),
     log:stop(),
     %% Save possibly edited preferences to file.
     savePrefs(),
@@ -625,13 +627,15 @@ analyze() ->
 
 analyze_aux(Module, Function, Args, Files) ->
     analysis_init(),
+    %% Cleanup previous loaded code, add the new ones
+    clearLoaded(),
+    ref_add(?LOADED_FILES, Files),
     Target = {Module, Function, Args},
-    Opts = [{files, Files}],
-    NewOpts = case ref_lookup(?PREF_PREB_ENABLED) of
-                  true -> Opts ++ [{preb, ref_lookup(?PREF_PREB_BOUND)}];
-                  false -> Opts
-              end,
-    Result = sched:analyze(Target, NewOpts),
+    Opts = case ref_lookup(?PREF_PREB_ENABLED) of
+                true -> [{preb, ref_lookup(?PREF_PREB_BOUND)}];
+                false -> []
+           end,
+    Result = sched:analyze(Target, Files, Opts),
     snapshot_add_analysis_ret(Result),
     analysis_cleanup().
 
@@ -844,6 +848,7 @@ clearAll() ->
     clearLog(),
     clearProbs(),
     clearErrors(),
+    clearLoaded(),
     clearIleaves().
 
 clearErrors() ->
@@ -880,6 +885,10 @@ clearSrc() ->
     wxStyledTextCtrl:setReadOnly(SourceText, false),
     wxStyledTextCtrl:clearAll(SourceText),
     wxStyledTextCtrl:setReadOnly(SourceText, true).
+
+clearLoaded() ->
+    LoadedFiles = ref_lookup(?LOADED_FILES),
+    instr:delete_and_purge(LoadedFiles).
 
 disableMenuItems() ->
     Opts = [{enable, false}],
@@ -1163,10 +1172,6 @@ remove_file(File) ->
 snapshot_add_analysis_ret(AnalysisRet) ->
     ref_add(?ANALYSIS_RET, AnalysisRet).
 
-snapshot_cleanup() ->
-    _ = os:cmd("rm -rf " ++ ?IMPORT_DIR),
-    ok.
-
 snapshot_export(Export) ->
     AnalysisRet = ref_lookup(?ANALYSIS_RET),
     Files = lists:reverse(ref_lookup(?FILES)),
@@ -1179,12 +1184,18 @@ snapshot_export(Export) ->
 
 snapshot_import(Import) ->
     clearAll(),
-    snapshot_cleanup(),
+    snapshot:cleanup(),
     case snapshot:import(Import) of
         ok -> continue;
         Snapshot ->
             Mods = snapshot:get_modules(Snapshot),
-            Files = [[filename:absname(M)] || M <- Mods],
+            Files = [filename:absname(M) || M <- Mods],
+            %% Instrument and load the files
+            %% Note: No error checking here.
+            ref_add(?LOADED_FILES, Files),
+            {ok, Bin} = instr:instrument_and_compile(Files),
+            ok = instr:load(Bin),
+            %% Extract info from our snapshot
             addListItems(?MODULE_LIST, Files),
             ref_add(?FILE_PATH, getDirectory()),
             Selection = snapshot:get_selection(Snapshot),
