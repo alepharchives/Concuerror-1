@@ -312,11 +312,44 @@ driver_normal(#context{active = Active, current = LastLid,
 check_for_same(Context, Pre, Bound, _PrevAction, _Action, false) ->
     put(?NT_STATE2, []),
     check_for_errors(Context, Pre, Bound);
-check_for_same(Context, Pre, Bound, _PrevAction, _Action, true) ->
-    abort;
-check_for_same(Context, Pre, Bound, _PrevAction, _Action, restart) ->
-    put(?NT_STATE2, []),
-    check_for_errors(Context, Pre, Bound).
+check_for_same(Context, Pre, Bound, PrevAction, Action, true) ->
+    case is_same(PrevAction, Action) of
+        true -> abort;
+        false ->
+            put(?NT_STATE2, []),
+            check_for_errors(Context, Pre, Bound)
+    end;
+check_for_same(Context, Pre, Bound, PrevAction, Action, restart) ->
+    case is_same(PrevAction, Action) of
+        false -> abort;
+        true ->
+            put(?NT_STATE2, []),
+            check_for_errors(Context, Pre, Bound)
+    end.
+
+% exit
+is_same(_, {'exit'}) -> true;
+% receive
+is_same({'send', _From1, Lid} , {'receive', Lid, _From2}) -> false;
+is_same(_, {'receive', _Lid, _From}) -> true;
+% send
+is_same({'receive', Lid, _From1}, {'send', _From2, Lid}) -> false;
+is_same({'send', _From1, Lid}, {'send', _From2, Lid}) -> false;
+is_same(_, {'send', _From, _Lid}) -> true;
+% spawn
+is_same(_, {'spawn'}) -> true;
+% ets
+is_same({Ets1}, {Ets2}) ->
+    Ets = [{'ets_insert_new'}, {'ets_lookup'}, {'ets_select_delete'},
+        {'ets_insert'}, {'ets_delete'}, {'ets_match_object'},
+        {'ets_foldl'}],
+    case {lists:keyfind(Ets1, 1, Ets), lists:keyfind(Ets2, 1, Ets)} of
+        {false, false} -> false;
+        {_, false} -> true;
+        {false, _} -> true;
+        {_, _} -> false
+    end;
+is_same(_, _) -> false.
 
 %% Handle four possible cases:
 %% - An error occured during the execution of the last process =>
@@ -440,7 +473,7 @@ handler(exit, Lid, #context{active = Active, details = Det} = Context,
     case Reason of
         normal ->
             log_details(Det, {exit, Lid, normal}),
-            {Context#context{active = NewActive}, nothing};
+            {Context#context{active = NewActive}, {'exit'}};
         _Else ->
             Error = error:new(Reason),
             log_details(Det, {exit, Lid, error:type(Error)}),
@@ -513,7 +546,7 @@ handler(spawn_link, ParentLid,
     ChildLid = lid:new(ChildPid, ParentLid),
     log_details(Det, {spawn_link, ParentLid, ChildLid}),
     NewActive = ?SETS:add_element(ChildLid, Active),
-    {Context#context{active = NewActive}, nothing};
+    {Context#context{active = NewActive}, {'spawn'}};
 
 %% FIXME: Refactor this (it's almost the same as 'spawn')
 handler(spawn_monitor, ParentLid,
@@ -560,7 +593,7 @@ handler(whereis, Lid, #context{details = Det} = Context, {RegName, Result}) ->
 %%       by this generic handler.
 handler(CallMsg, Lid, #context{details = Det} = Context, Args) ->
     log_details(Det, {CallMsg, Lid, Args}),
-    {Context, nothing}.
+    {Context, {CallMsg}}.
 
 %%%----------------------------------------------------------------------
 %%% Helper functions
