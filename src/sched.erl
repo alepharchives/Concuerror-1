@@ -116,7 +116,7 @@ analyze(Target, Files, Options) ->
                 ok = instr:load(Bin),
                 log:log("Running analysis...~n~n"),
                 {T1, _} = statistics(wall_clock),
-                ISOption = {init_state, {state:empty(), false, 0}},
+                ISOption = {init_state, {state:empty(), 0, 0}},
                 Result = interleave(Target, [ISOption|Options]),
                 {T2, _} = statistics(wall_clock),
                 {Mins, Secs} = elapsed_time(T1, T2),
@@ -175,7 +175,8 @@ interleave_aux(Target, Options, Parent) ->
     state_start(),
     %% Save empty replay state for the first run.
     {init_state, InitState} = lists:keyfind(init_state, 1, Options),
-    state_save([InitState]),
+    put(?NT_STATE2, []),
+    state_save(InitState),
     PreBound =
         case lists:keyfind(preb, 1, Options) of
             {preb, inf} -> ?INFINITY;
@@ -261,7 +262,7 @@ interleave_loop(Target, RunCnt, Tickets, PreBound, Options) ->
 
 driver(Context, {ReplayState, IsRep, Pre}, Bound) ->
     case state:is_empty(ReplayState) of
-        true -> driver_normal(Context, 0, Bound);
+        true -> put(?NT_STATE2, []), driver_normal(Context, 0, Bound);
         false -> driver_replay(Context, ReplayState, IsRep, Pre, Bound, nothing)
     end.
 
@@ -302,6 +303,7 @@ driver_normal(#context{active = Active, current = LastLid,
     end.
 
 check_for_same(Context, Pre, Bound, _PrevAction, _Action, _IsRep) ->
+    put(?NT_STATE2, []),
     check_for_errors(Context, Pre, Bound).
 
 %% Handle four possible cases:
@@ -341,11 +343,9 @@ run_no_block(#context{state = State} = Context, {Next, Rest, W}) ->
     end.
 
 insert_states(State, {Lids, current}, Pre, _Bound) ->
-    Extend = lists:map(fun(L) -> {state:extend(State, L), false, Pre} end, Lids),
-    state_save(Extend);
+    lists:foreach(fun(L) -> state_save({state:extend(State, L), L, Pre}) end, Lids);
 insert_states(State, {Lids, next}, Pre, Bound) when Bound==inf; Pre<Bound->
-    Extend = lists:map(fun(L) -> {state:extend(State, L), false, Pre+1} end, Lids),
-    state_save(Extend);
+    lists:foreach(fun(L) -> state_save({state:extend(State, L), L, Pre+1}) end, Lids);
 insert_states(_State, _Lids, _Pre, _Bound) -> ok.
 
 %% Run process Lid in context Context until it encounters a preemption point.
@@ -590,11 +590,18 @@ state_load() ->
     end.
 
 %% Add some states to the current `state` table.
-state_save(State) ->
+state_save({State, Lid, Preb}) ->
 %    Size = length(State),
 %    {Len1, Len2} = get(?NT_STATELEN),
 %    put(?NT_STATELEN, {Len1+Size, Len2}),
-    put(?NT_STATE1, State ++ get(?NT_STATE1)).
+    Used = get(?NT_STATE2),
+    case lists:keyfind(Lid, 1, Used) of
+        false ->
+            put(?NT_STATE2, [{Lid} | Used]),
+            put(?NT_STATE1, [{State, false, Preb} | get(?NT_STATE1)]);
+        _ ->
+            put(?NT_STATE1, [{State, true, Preb} | get(?NT_STATE1)])
+    end.
 
 %% Initialize state tables.
 state_start() ->
