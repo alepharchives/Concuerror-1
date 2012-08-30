@@ -116,7 +116,7 @@ analyze(Target, Files, Options) ->
                 ok = instr:load(Bin),
                 log:log("Running analysis...~n~n"),
                 {T1, _} = statistics(wall_clock),
-                ISOption = {init_state, {state:empty(), 0}},
+                ISOption = {init_state, {state:empty(), false, 0}},
                 Result = interleave(Target, [ISOption|Options]),
                 {T2, _} = statistics(wall_clock),
                 {Mins, Secs} = elapsed_time(T1, T2),
@@ -259,15 +259,15 @@ interleave_loop(Target, RunCnt, Tickets, PreBound, Options) ->
 %%% Core components
 %%%----------------------------------------------------------------------
 
-driver(Context, {ReplayState, Pre}, Bound) ->
+driver(Context, {ReplayState, IsRep, Pre}, Bound) ->
     case state:is_empty(ReplayState) of
         true -> driver_normal(Context, 0, Bound);
-        false -> driver_replay(Context, ReplayState, Pre, Bound)
+        false -> driver_replay(Context, ReplayState, IsRep, Pre, Bound, nothing)
     end.
 
-driver_replay(Context, ReplayState, Pre, Bound) ->
+driver_replay(Context, ReplayState, IsRep, Pre, Bound, PrevAction) ->
     {Next, Rest} = state:trim_head(ReplayState),
-    NewContext = run(Context#context{current = Next, error = ?NO_ERROR}),
+    {NewContext, Action} = run(Context#context{current = Next, error = ?NO_ERROR}),
     #context{blocked = NewBlocked} = NewContext,
     case state:is_empty(Rest) of
         true ->
@@ -277,12 +277,12 @@ driver_replay(Context, ReplayState, Pre, Bound) ->
                 true -> abort;
                 %% Replay has finished; proceed in normal mode, after checking
                 %% for errors during the last replayed action.
-                false -> check_for_errors(NewContext, Pre, Bound)
+                false -> check_for_same(NewContext, Pre, Bound, PrevAction, Action, IsRep)
             end;
         false ->
             case ?SETS:is_element(Next, NewBlocked) of
                 true -> log:internal("Proc. ~p should be active.", [Next]);
-                false -> driver_replay(NewContext, Rest, Pre, Bound)
+                false -> driver_replay(NewContext, Rest, IsRep, Pre, Bound, Action)
             end
     end.
 
@@ -300,6 +300,9 @@ driver_normal(#context{active = Active, current = LastLid,
     {NewContext, Insert} = run_no_block(Context, Next),
     insert_states(State, Insert, Pre, Bound),
     check_for_errors(NewContext, Pre, Bound).
+
+check_for_same(Context, Pre, Bound, _PrevAction, _Action, _IsRep) ->
+    check_for_errors(Context, Pre, Bound).
 
 %% Handle four possible cases:
 %% - An error occured during the execution of the last process =>
@@ -328,7 +331,7 @@ check_for_errors(#context{active = NewActive, blocked = NewBlocked,
     end.
 
 run_no_block(#context{state = State} = Context, {Next, Rest, W}) ->
-    NewContext = run(Context#context{current = Next, error = ?NO_ERROR}),
+    {NewContext, _Action} = run(Context#context{current = Next, error = ?NO_ERROR}),
     #context{blocked = NewBlocked} = NewContext,
     case ?SETS:is_element(Next, NewBlocked) of
         true ->
@@ -342,10 +345,10 @@ run_no_block(#context{state = State} = Context, {Next, Rest, W}) ->
     end.
 
 insert_states(State, {Lids, current}, Pre, _Bound) ->
-    Extend = lists:map(fun(L) -> {state:extend(State, L), Pre} end, Lids),
+    Extend = lists:map(fun(L) -> {state:extend(State, L), false, Pre} end, Lids),
     state_save(Extend);
 insert_states(State, {Lids, next}, Pre, Bound) when Bound==inf; Pre<Bound->
-    Extend = lists:map(fun(L) -> {state:extend(State, L), Pre+1} end, Lids),
+    Extend = lists:map(fun(L) -> {state:extend(State, L), false, Pre+1} end, Lids),
     state_save(Extend);
 insert_states(_State, _Lids, _Pre, _Bound) -> ok.
 
@@ -357,9 +360,10 @@ run(#context{current = Lid, state = State} = Context) ->
     %% Send message to "unblock" the process.
     continue(Lid),
     %% Dispatch incoming notifications to the appropriate handler.
-    NewContext = dispatch(Context#context{state = NewState}),
+    NewContext1 = dispatch(Context#context{state = NewState}),
     %% Update context due to wakeups caused by the last action.
-    ?SETS:fold(fun check_wakeup/2, NewContext, NewContext#context.blocked).
+    NewContext2 = ?SETS:fold(fun check_wakeup/2, NewContext1, NewContext1#context.blocked),
+    {NewContext2, nothing}.
 
 check_wakeup(Lid, #context{active = Active, blocked = Blocked} = Context) ->
     continue(Lid),
@@ -581,11 +585,11 @@ log_details(Det, Action) ->
 state_load() ->
 %    {Len1, Len2} = get(?NT_STATELEN),
     case get(?NT_STATE1) of
-        [{State,Preb} | Rest] ->
+        [{State,IsRep,Preb} | Rest] ->
             put(?NT_STATE1, Rest),
 %            log:progress(log, Len1-1),
 %            put(?NT_STATELEN, {Len1-1, Len2}),
-            {state:pack(State), Preb};
+            {state:pack(State), IsRep, Preb};
         [] -> no_state
     end.
 
