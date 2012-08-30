@@ -288,18 +288,18 @@ driver_replay(Context, ReplayState, IsRep, Pre, Bound, PrevAction) ->
 
 driver_normal(#context{active = Active, current = LastLid,
                        state = State} = Context, Pre, Bound) ->
-    Next =
-        case ?SETS:is_element(LastLid, Active) of
-            true ->
-                TmpActive = ?SETS:to_list(?SETS:del_element(LastLid, Active)),
-                {LastLid,TmpActive, next};
-            false ->
-                [Head|TmpActive] = ?SETS:to_list(Active),
-                {Head, TmpActive, current}
-        end,
-    {NewContext, Insert} = run_no_block(Context, Next),
-    insert_states(State, Insert, Pre, Bound),
-    check_for_errors(NewContext, Pre, Bound).
+    case ?SETS:is_element(LastLid, Active) of
+        true ->
+            TmpActive = ?SETS:to_list(?SETS:del_element(LastLid, Active)),
+            Next = {LastLid, TmpActive, next},
+            {NewContext, Insert} = run_no_block(Context, Next),
+            insert_states(State, Insert, Pre, Bound),
+            check_for_errors(NewContext, Pre, Bound);
+        false ->
+            Insert = {?SETS:to_list(Active), current},
+            insert_states(State, Insert, Pre, Bound),
+            abort
+    end.
 
 check_for_same(Context, Pre, Bound, _PrevAction, _Action, _IsRep) ->
     check_for_errors(Context, Pre, Bound).
@@ -327,6 +327,7 @@ check_for_errors(#context{active = NewActive, blocked = NewBlocked,
                     end;
                 _NonEmptyActive -> driver_normal(NewContext, Pre, Bound)
             end;
+        abort -> abort;
         _Other -> {error, NewError, NewState}
     end.
 
@@ -335,12 +336,7 @@ run_no_block(#context{state = State} = Context, {Next, Rest, W}) ->
     #context{blocked = NewBlocked} = NewContext,
     case ?SETS:is_element(Next, NewBlocked) of
         true ->
-            case Rest of
-                [] -> {NewContext#context{state = State}, {[], W}};
-                [RH|RT] ->
-                    NextContext = NewContext#context{state = State},
-                    run_no_block(NextContext, {RH, RT, current})
-            end;
+            {NewContext#context{state = State, error=abort}, {Rest, current}};
         false -> {NewContext, {Rest, W}}
     end.
 
