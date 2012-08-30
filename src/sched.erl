@@ -116,7 +116,7 @@ analyze(Target, Files, Options) ->
                 ok = instr:load(Bin),
                 log:log("Running analysis...~n~n"),
                 {T1, _} = statistics(wall_clock),
-                ISOption = {init_state, {state:empty(), 0, 0}},
+                ISOption = {init_state, {state:empty(), false, 0}},
                 Result = interleave(Target, [ISOption|Options]),
                 {T2, _} = statistics(wall_clock),
                 {Mins, Secs} = elapsed_time(T1, T2),
@@ -261,6 +261,7 @@ interleave_loop(Target, RunCnt, Tickets, PreBound, Options) ->
 %%%----------------------------------------------------------------------
 
 driver(Context, {ReplayState, IsRep, Pre}, Bound) ->
+%    io:format("IsRep = ~p\n", [IsRep]),
     case state:is_empty(ReplayState) of
         true -> put(?NT_STATE2, []), driver_normal(Context, 0, Bound);
         false -> driver_replay(Context, ReplayState, IsRep, Pre, Bound, nothing)
@@ -270,19 +271,25 @@ driver_replay(Context, ReplayState, IsRep, Pre, Bound, PrevAction) ->
     {Next, Rest} = state:trim_head(ReplayState),
     {NewContext, Action} = run(Context#context{current = Next, error = ?NO_ERROR}),
     #context{blocked = NewBlocked} = NewContext,
+    #context{active = Active, state = State} = Context,
     case state:is_empty(Rest) of
         true ->
             case ?SETS:is_element(Next, NewBlocked) of
                 %% If the last action of the replayed state prefix is a block,
                 %% we can safely abort.
-                true -> abort;
+                true ->
+                    Temp1 = ?SETS:to_list(?SETS:del_element(Next, Active)),
+                    lists:foreach(fun(T) ->
+                                X = state:extend(state:extend(State, T), Next),
+                                state_save({X, restart, Pre+1}) end, Temp1),
+                    abort;
                 %% Replay has finished; proceed in normal mode, after checking
                 %% for errors during the last replayed action.
                 false -> check_for_same(NewContext, Pre, Bound, PrevAction, Action, IsRep)
             end;
         false ->
             case ?SETS:is_element(Next, NewBlocked) of
-                true -> log:internal("Proc. ~p should be active.", [Next]);
+                true -> abort;
                 false -> driver_replay(NewContext, Rest, IsRep, Pre, Bound, Action)
             end
     end.
@@ -302,7 +309,12 @@ driver_normal(#context{active = Active, current = LastLid,
             abort
     end.
 
-check_for_same(Context, Pre, Bound, _PrevAction, _Action, _IsRep) ->
+check_for_same(Context, Pre, Bound, _PrevAction, _Action, false) ->
+    put(?NT_STATE2, []),
+    check_for_errors(Context, Pre, Bound);
+check_for_same(Context, Pre, Bound, _PrevAction, _Action, true) ->
+    abort;
+check_for_same(Context, Pre, Bound, _PrevAction, _Action, restart) ->
     put(?NT_STATE2, []),
     check_for_errors(Context, Pre, Bound).
 
@@ -329,7 +341,15 @@ check_for_errors(#context{active = NewActive, blocked = NewBlocked,
                     end;
                 _NonEmptyActive -> driver_normal(NewContext, Pre, Bound)
             end;
-        abort -> abort;
+        abort ->
+            case ?SETS:size(NewActive) of
+                0 ->
+                    case ?SETS:size(NewBlocked) of
+                        0 -> ok;
+                        _ -> abort
+                    end;
+                _ -> abort
+            end;
         _Other -> {error, NewError, NewState}
     end.
 
@@ -356,10 +376,10 @@ run(#context{current = Lid, state = State} = Context) ->
     %% Send message to "unblock" the process.
     continue(Lid),
     %% Dispatch incoming notifications to the appropriate handler.
-    NewContext1 = dispatch(Context#context{state = NewState}),
+    {NewContext1, Action} = dispatch(Context#context{state = NewState}),
     %% Update context due to wakeups caused by the last action.
     NewContext2 = ?SETS:fold(fun check_wakeup/2, NewContext1, NewContext1#context.blocked),
-    {NewContext2, nothing}.
+    {NewContext2, Action}.
 
 check_wakeup(Lid, #context{active = Active, blocked = Blocked} = Context) ->
     continue(Lid),
@@ -391,7 +411,7 @@ dispatch(Context) ->
 
 handler('after', Lid, #context{details = Det} = Context, _Misc) ->
     log_details(Det, {'after', Lid}),
-    Context;
+    {Context, nothing};
 
 %% Move the process to the blocked set.
 handler(block, Lid,
@@ -400,13 +420,13 @@ handler(block, Lid,
     NewActive = ?SETS:del_element(Lid, Active),
     NewBlocked = ?SETS:add_element(Lid, Blocked),
     log_details(Det, {block, Lid}),
-    Context#context{active = NewActive, blocked = NewBlocked};
+    {Context#context{active = NewActive, blocked = NewBlocked}, nothing};
 
 handler(demonitor, Lid, #context{details = Det} = Context, _Ref) ->
     %% TODO: Get LID from Ref?
     TargetLid = lid:mock(0),
     log_details(Det, {demonitor, Lid, TargetLid}),
-    Context;
+    {Context, nothing};
 
 %% Remove the exited process from the active set.
 %% NOTE: This is called after a process has exited, not when it calls
@@ -420,11 +440,11 @@ handler(exit, Lid, #context{active = Active, details = Det} = Context,
     case Reason of
         normal ->
             log_details(Det, {exit, Lid, normal}),
-            Context#context{active = NewActive};
+            {Context#context{active = NewActive}, nothing};
         _Else ->
             Error = error:new(Reason),
             log_details(Det, {exit, Lid, error:type(Error)}),
-            Context#context{active = NewActive, error = Error}
+            {Context#context{active = NewActive, error = Error}, nothing}
     end;
 
 %% Return empty active and blocked queues to force run termination.
@@ -435,46 +455,46 @@ handler(halt, Lid, #context{details = Det} = Context, Misc) ->
             Status -> {halt, Lid, Status}
         end,
     log_details(Det, Halt),
-    Context#context{active = ?SETS:new(), blocked = ?SETS:new()};
+    {Context#context{active = ?SETS:new(), blocked = ?SETS:new()}, nothing};
 
 handler(is_process_alive, Lid, #context{details = Det} = Context, TargetPid) ->
     TargetLid = lid:from_pid(TargetPid),
     log_details(Det, {is_process_alive, Lid, TargetLid}),
-    Context;
+    {Context, nothing};
 
 handler(link, Lid, #context{details = Det} = Context, TargetPid) ->
     TargetLid = lid:from_pid(TargetPid),
     log_details(Det, {link, Lid, TargetLid}),
-    Context;
+    {Context, nothing};
 
 handler(monitor, Lid, #context{details = Det} = Context, {Item, _Ref}) ->
     TargetLid = lid:from_pid(Item),
     log_details(Det, {monitor, Lid, TargetLid}),
-    Context;
+    {Context, nothing};
 
 handler(process_flag, Lid, #context{details = Det} = Context, {Flag, Value}) ->
     log_details(Det, {process_flag, Lid, Flag, Value}),
-    Context;
+    {Context, nothing};
 
 %% Normal receive message handler.
 handler('receive', Lid, #context{details = Det} = Context, {From, Msg}) ->
     log_details(Det, {'receive', Lid, From, Msg}),
-    Context;
+    {Context, {'receive', Lid, From}};
 
 %% Receive message handler for special messages, like 'EXIT' and 'DOWN',
 %% which don't have an associated sender process.
 handler('receive_no_instr', Lid, #context{details = Det} = Context, Msg) ->
     log_details(Det, {'receive_no_instr', Lid, Msg}),
-    Context;
+    {Context, nothing};
 
 handler(register, Lid, #context{details = Det} = Context, {RegName, RegLid}) ->
     log_details(Det, {register, Lid, RegName, RegLid}),
-    Context;
+    {Context, nothing};
 
 handler(send, Lid, #context{details = Det} = Context, {DstPid, Msg}) ->
     DstLid = lid:from_pid(DstPid),
     log_details(Det, {send, Lid, DstLid, Msg}),
-    Context;
+    {Context, {'send', Lid, DstLid}};
 
 %% Link the newly spawned process to the scheduler process and add it to the
 %% active set.
@@ -484,7 +504,7 @@ handler(spawn, ParentLid,
     ChildLid = lid:new(ChildPid, ParentLid),
     log_details(Det, {spawn, ParentLid, ChildLid}),
     NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive};
+    {Context#context{active = NewActive}, {'spawn'}};
 
 %% FIXME: Refactor this (it's exactly the same as 'spawn')
 handler(spawn_link, ParentLid,
@@ -493,7 +513,7 @@ handler(spawn_link, ParentLid,
     ChildLid = lid:new(ChildPid, ParentLid),
     log_details(Det, {spawn_link, ParentLid, ChildLid}),
     NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive};
+    {Context#context{active = NewActive}, nothing};
 
 %% FIXME: Refactor this (it's almost the same as 'spawn')
 handler(spawn_monitor, ParentLid,
@@ -502,7 +522,7 @@ handler(spawn_monitor, ParentLid,
     ChildLid = lid:new(ChildPid, ParentLid),
     log_details(Det, {spawn_monitor, ParentLid, ChildLid}),
     NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive};
+    {Context#context{active = NewActive}, nothing};
 
 %% Similar to above depending on options.
 handler(spawn_opt, ParentLid,
@@ -518,21 +538,21 @@ handler(spawn_opt, ParentLid,
                                           sets:from_list(Opt))),
     log_details(Det, {spawn_opt, ParentLid, ChildLid, Opts}),
     NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive};
+    {Context#context{active = NewActive}, nothing};
 
 handler(unlink, Lid, #context{details = Det} = Context, TargetPid) ->
     TargetLid = lid:from_pid(TargetPid),
     log_details(Det, {unlink, Lid, TargetLid}),
-    Context;
+    {Context, nothing};
 
 handler(unregister, Lid, #context{details = Det} = Context, RegName) ->
     log_details(Det, {unregister, Lid, RegName}),
-    Context;
+    {Context, nothing};
 
 handler(whereis, Lid, #context{details = Det} = Context, {RegName, Result}) ->
     ResultLid = lid:from_pid(Result),
     log_details(Det, {whereis, Lid, RegName, ResultLid}),
-    Context;
+    {Context, nothing};
 
 %% Handler for anything "non-special". It just passes the arguments
 %% for logging.
@@ -540,7 +560,7 @@ handler(whereis, Lid, #context{details = Det} = Context, {RegName, Result}) ->
 %%       by this generic handler.
 handler(CallMsg, Lid, #context{details = Det} = Context, Args) ->
     log_details(Det, {CallMsg, Lid, Args}),
-    Context.
+    {Context, nothing}.
 
 %%%----------------------------------------------------------------------
 %%% Helper functions
@@ -590,6 +610,8 @@ state_load() ->
     end.
 
 %% Add some states to the current `state` table.
+state_save({State, restart, Preb}) ->
+    put(?NT_STATE1, [{State, restart, Preb} | get(?NT_STATE1)]);
 state_save({State, Lid, Preb}) ->
 %    Size = length(State),
 %    {Len1, Len2} = get(?NT_STATELEN),
