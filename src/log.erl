@@ -17,7 +17,7 @@
 -export([internal/1, internal/2]).
 %% Log API exports.
 -export([attach/2, detach/2, start/0, stop/0, log/1, log/2,
-         show_error/1, progress/2]).
+         show_error/1, remaining/1]).
 %% Log callback exports.
 -export([init/1, terminate/2, handle_call/2, handle_info/2,
          handle_event/2, code_change/3]).
@@ -104,21 +104,19 @@ log(String, Args) when is_list(String), is_list(Args) ->
     LogMsg = io_lib:format(String, Args),
     gen_event:notify(log, {msg, LogMsg}).
 
-%% @spec show_error(ticket:ticket()) -> 'ok'
+%% @spec show_error(ticket:ticket()|'no_error') -> 'ok'
 %% @doc: Shows an error.
--spec show_error(ticket:ticket()) -> 'ok'.
+-spec show_error(ticket:ticket()|'no_error') -> 'ok'.
 
 show_error(Ticket) ->
     gen_event:notify(log, {error, Ticket}).
 
-%% @spec progress(log|swap, non_neg_integer()) -> 'ok'
-%% @doc: Shows analysis progress.
--spec progress(log|swap, non_neg_integer()) -> 'ok'.
+%% @spec remaining(non_neg_integer()) -> 'ok'
+%% @doc: Shows remaining interleavings.
+-spec remaining(non_neg_integer()) -> 'ok'.
 
-progress(log, Remain) ->
-    gen_event:notify(log, {progress_log, Remain});
-progress(swap, NewState) ->
-    gen_event:notify(log, {progress_swap, NewState}).
+remaining(Remain) ->
+    gen_event:notify(log, {'remaining', Remain}).
 
 %%%----------------------------------------------------------------------
 %%% Callback functions
@@ -141,9 +139,7 @@ handle_event({msg, String}, State) ->
     {ok, State};
 handle_event({error, _Ticket}, State) ->
     {ok, State};
-handle_event({progress_log, _Remain}, State) ->
-    {ok, State};
-handle_event({progress_swap, _NewState}, State) ->
+handle_event({'remaining', _Remain}, State) ->
     {ok, State}.
 
 -spec code_change(term(), term(), term()) -> no_return().

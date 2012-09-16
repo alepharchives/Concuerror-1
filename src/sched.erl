@@ -28,7 +28,6 @@
 %%% Definitions
 %%%----------------------------------------------------------------------
 
--define(INFINITY, 1000000).
 -define(NO_ERROR, undef).
 
 %%%----------------------------------------------------------------------
@@ -112,7 +111,7 @@
 analyze(Target, Files, Options) ->
     PreBound =
         case lists:keyfind(preb, 1, Options) of
-            {preb, inf} -> ?INFINITY;
+            {preb, inf} -> inf;
             {preb, Bound} -> Bound;
             false -> ?DEFAULT_PREB
         end,
@@ -172,33 +171,17 @@ interleave_aux(Target, PreBound, Parent) ->
     %% Initialize state table.
     state_start(),
     %% Save empty replay state for the first run.
-    InitState = state:empty(),
+    InitState = {state:empty(), 0},
     state_save([InitState]),
-    Result = interleave_outer_loop(Target, 0, [], -1, PreBound),
+    {RunCnt, Tickets, _Stop} = interleave_loop(Target, 1, [], PreBound),
+    Result = interleave_ret(Tickets, RunCnt),
     state_stop(),
     unregister(?RP_SCHED),
     Parent ! {interleave_result, Result}.
 
-interleave_outer_loop(_T, RunCnt, Tickets, MaxBound, MaxBound) ->
-    interleave_outer_loop_ret(Tickets, RunCnt);
-interleave_outer_loop(Target, RunCnt, Tickets, CurrBound, MaxBound) ->
-    {NewRunCnt, TotalTickets, Stop} = interleave_loop(Target, 1, Tickets),
-    TotalRunCnt = NewRunCnt + RunCnt,
-    state_swap(),
-    case state_peak() of
-        no_state -> interleave_outer_loop_ret(TotalTickets, TotalRunCnt);
-        _State ->
-            case Stop of
-                true -> interleave_outer_loop_ret(TotalTickets, TotalRunCnt);
-                false ->
-                    interleave_outer_loop(Target, TotalRunCnt, TotalTickets,
-                                          CurrBound + 1, MaxBound)
-            end
-    end.
-
-interleave_outer_loop_ret([], RunCnt) ->
+interleave_ret([], RunCnt) ->
     {ok, RunCnt};
-interleave_outer_loop_ret(Tickets, RunCnt) ->
+interleave_ret(Tickets, RunCnt) ->
     {error, RunCnt, Tickets}.
 
 %% Main loop for producing process interleavings.
@@ -206,7 +189,7 @@ interleave_outer_loop_ret(Tickets, RunCnt) ->
 %% so that the latter can receive the former's exit message when it
 %% terminates. In the same way, every process that may be spawned in
 %% the course of the program shall be linked to the scheduler process.
-interleave_loop(Target, RunCnt, Tickets) ->
+interleave_loop(Target, RunCnt, Tickets, PreBound) ->
     %% Lookup state to replay.
     case state_load() of
         no_state -> {RunCnt - 1, Tickets, false};
@@ -229,7 +212,7 @@ interleave_loop(Target, RunCnt, Tickets) ->
             Context = #context{active=Active, state=State,
                 blocked=Blocked, actions=[]},
             %% Interleave using driver
-            Ret = driver(Context, ReplayState),
+            Ret = driver(Context, ReplayState, PreBound),
             %% Cleanup
             proc_cleanup(processes() -- ProcBefore),
             lid:stop(),
@@ -239,7 +222,9 @@ interleave_loop(Target, RunCnt, Tickets) ->
                         Ticket = ticket:new(Error, ErrorState),
                         log:show_error(Ticket),
                         [Ticket|Tickets];
-                    _OtherRet1 -> Tickets
+                    _OtherRet1 ->
+                        log:show_error('no_error'),
+                        Tickets
                 end,
             NewRunCnt =
                 case Ret of
@@ -255,7 +240,7 @@ interleave_loop(Target, RunCnt, Tickets) ->
             receive
                 stop_analysis -> {NewRunCnt - 1, NewTickets, true}
             after 0 ->
-                    interleave_loop(Target, NewRunCnt, NewTickets)
+                    interleave_loop(Target, NewRunCnt, NewTickets, PreBound)
             end
     end.
 
@@ -263,13 +248,13 @@ interleave_loop(Target, RunCnt, Tickets) ->
 %%% Core components
 %%%----------------------------------------------------------------------
 
-driver(Context, ReplayState) ->
+driver(Context, {ReplayState, CurrPreem}, Bound) ->
     case state:is_empty(ReplayState) of
-        true -> driver_normal(Context);
-        false -> driver_replay(Context, ReplayState)
+        true -> driver_normal(Context, 0, Bound);
+        false -> driver_replay(Context, ReplayState, CurrPreem, Bound)
     end.
 
-driver_replay(Context, ReplayState) ->
+driver_replay(Context, ReplayState, CurrPreem, Bound) ->
     {Next, Rest} = state:trim_head(ReplayState),
     NewContext = run(Context#context{current = Next, error = ?NO_ERROR}),
     #context{blocked = NewBlocked} = NewContext,
@@ -281,17 +266,17 @@ driver_replay(Context, ReplayState) ->
                 true -> abort;
                 %% Replay has finished; proceed in normal mode, after checking
                 %% for errors during the last replayed action.
-                false -> check_for_errors(NewContext)
+                false -> check_for_errors(NewContext, CurrPreem, Bound)
             end;
         false ->
             case ?SETS:is_element(Next, NewBlocked) of
                 true -> log:internal("Proc. ~p should be active.", [Next]);
-                false -> driver_replay(NewContext, Rest)
+                false -> driver_replay(NewContext, Rest, CurrPreem, Bound)
             end
     end.
 
-driver_normal(#context{active=Active, current=LastLid,
-                       state = State} = Context) ->
+driver_normal(#context{active = Active, current = LastLid,
+                       state = State} = Context, CurrPreem, Bound) ->
     Next =
         case ?SETS:is_element(LastLid, Active) of
             true ->
@@ -302,8 +287,8 @@ driver_normal(#context{active=Active, current=LastLid,
                 {Head, TmpActive, current}
         end,
     {NewContext, Insert} = run_no_block(Context, Next),
-    insert_states(State, Insert),
-    check_for_errors(NewContext).
+    insert_states(State, Insert, CurrPreem, Bound),
+    check_for_errors(NewContext, CurrPreem, Bound).
 
 %% Handle four possible cases:
 %% - An error occured during the execution of the last process =>
@@ -315,7 +300,7 @@ driver_normal(#context{active=Active, current=LastLid,
 %% - There exists at least one active process =>
 %%   Continue run.
 check_for_errors(#context{error=NewError, actions=Actions, active=NewActive,
-                          blocked=NewBlocked} = NewContext) ->
+                          blocked=NewBlocked} = NewContext, CurrPreem, Bound) ->
     case NewError of
         ?NO_ERROR ->
             case ?SETS:size(NewActive) of
@@ -327,7 +312,7 @@ check_for_errors(#context{error=NewError, actions=Actions, active=NewActive,
                             ErrorState = lists:reverse(Actions),
                             {error, Deadlock, ErrorState}
                     end;
-                _NonEmptyActive -> driver_normal(NewContext)
+                _NonEmptyActive -> driver_normal(NewContext, CurrPreem, Bound)
             end;
         _Other ->
             ErrorState = lists:reverse(Actions),
@@ -348,12 +333,16 @@ run_no_block(#context{state = State} = Context, {Next, Rest, W}) ->
         false -> {NewContext, {Rest, W}}
     end.
 
-insert_states(State, {Lids, current}) ->
-    Extend = lists:map(fun(L) -> state:extend(State, L) end, Lids),
+insert_states(State, {Lids, current}, CurrPreem, _Bound) ->
+    log:remaining(length(Lids)),
+    Extend = lists:map(fun(L) -> {state:extend(State, L), CurrPreem} end, Lids),
     state_save(Extend);
-insert_states(State, {Lids, next}) ->
-    Extend = lists:map(fun(L) -> state:extend(State, L) end, Lids),
-    state_save_next(Extend).
+insert_states(State, {Lids, next}, CurrPreem, Bound)
+        when Bound==inf; CurrPreem<Bound->
+    log:remaining(length(Lids)),
+    Extend = lists:map(fun(L) -> {state:extend(State,L),CurrPreem+1} end, Lids),
+    state_save(Extend);
+insert_states(_State, _Lids, _CurrPreem, _Bound) -> ok.
 
 %% Run process Lid in context Context until it encounters a preemption point.
 run(#context{current = Lid, state = State} = Context) ->
@@ -620,55 +609,25 @@ elapsed_time(T1, T2) ->
 %% Remove and return a state.
 %% If no states available, return 'no_state'.
 state_load() ->
-    {Len1, Len2} = get(?NT_STATELEN),
-    case get(?NT_STATE1) of
-        [State | Rest] ->
-            put(?NT_STATE1, Rest),
-            log:progress(log, Len1-1),
-            put(?NT_STATELEN, {Len1-1, Len2}),
-            state:pack(State);
-        [] -> no_state
-    end.
-
-%% Return a state without removing it.
-%% If no states available, return 'no_state'.
-state_peak() ->
-    case get(?NT_STATE1) of
-        [State|_] -> State;
+    case get(?NT_STATE) of
+        [{State,Preb} | Rest] ->
+            put(?NT_STATE, Rest),
+            {state:pack(State), Preb};
         [] -> no_state
     end.
 
 %% Add some states to the current `state` table.
 state_save(State) ->
-    Size = length(State),
-    {Len1, Len2} = get(?NT_STATELEN),
-    put(?NT_STATELEN, {Len1+Size, Len2}),
-    put(?NT_STATE1, State ++ get(?NT_STATE1)).
-
-%% Add some states to the next `state` table.
-state_save_next(State) ->
-    Size = length(State),
-    {Len1, Len2} = get(?NT_STATELEN),
-    put(?NT_STATELEN, {Len1, Len2+Size}),
-    put(?NT_STATE2, State ++ get(?NT_STATE2)).
+    put(?NT_STATE, State ++ get(?NT_STATE)).
 
 %% Initialize state tables.
 state_start() ->
-    put(?NT_STATE1, []),
-    put(?NT_STATE2, []),
-    put(?NT_STATELEN, {0, 0}),
+    put(?NT_STATE, []),
     ok.
 
 %% Clean up state table.
 state_stop() ->
     ok.
-
-%% Swap names of the two state tables and clear one of them.
-state_swap() ->
-    {_Len1, Len2} = get(?NT_STATELEN),
-    log:progress(swap, Len2),
-    put(?NT_STATELEN, {Len2, 0}),
-    put(?NT_STATE1, put(?NT_STATE2, [])).
 
 
 %%%----------------------------------------------------------------------

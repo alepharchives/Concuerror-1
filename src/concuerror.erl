@@ -43,12 +43,10 @@
 
 %% Log event handler internal state.
 %% The state (if we want to have progress bar) contains
-%% the current preemption number,
-%% the progress in per cent,
-%% the number of interleaving contained in this preemption number,
+%% the current checked interleavings,
+%% the current remaining interleavings,
 %% the number of errors we have found so far.
--type progress() :: {non_neg_integer(), -1..100,
-                     non_neg_integer(), non_neg_integer()}.
+-type progress() :: {non_neg_integer(), non_neg_integer(), non_neg_integer()}.
 
 -type state() :: progress() | 'noprogress'.
 
@@ -460,45 +458,37 @@ init(Options) ->
     Progress =
         case lists:keyfind(noprogress, 1, Options) of
             {noprogress} -> noprogress;
-            false -> {0,-1,1,0}
+            false -> {0,1,0}
         end,
     {ok, Progress}.
 
 -spec terminate(term(), state()) -> 'ok'.
+
 terminate(_Reason, _State) -> ok.
 
 -spec handle_event(log:event(), state()) -> {'ok', state()}.
+
 handle_event({msg, String}, State) ->
     io:format("~s", [String]),
     {ok, State};
-handle_event({error, _Ticket}, {CurrPreb,Progress,Total,Errors}) ->
-    progress_bar(CurrPreb, Progress, Errors+1),
-    {ok, {CurrPreb,Progress,Total,Errors+1}};
+
+handle_event({error, 'no_error'}, {NumChecked, NumRemain, NumErrors}) ->
+    State = {NumChecked+1, NumRemain-1, NumErrors},
+    progress_bar(State),
+    {ok, State};
+handle_event({error, _Ticket}, {NumChecked, NumRemain, NumErrors}) ->
+    State = {NumChecked+1, NumRemain-1, NumErrors+1},
+    progress_bar(State),
+    {ok, State};
 handle_event({error, _Ticket}, 'noprogress') ->
     {ok, 'noprogress'};
-handle_event({progress_log, Remain}, {CurrPreb,Progress,Total,Errors}=State) ->
-    NewProgress = erlang:trunc(100 - Remain*100/Total),
-    case NewProgress > Progress of
-        true ->
-            progress_bar(CurrPreb, NewProgress, Errors),
-            {ok, {CurrPreb,NewProgress,Total,Errors}};
-        false ->
-            {ok, State}
-    end;
-handle_event({progress_log, _Remain}, 'noprogress') ->
-    {ok, 'noprogress'};
-handle_event({progress_swap, NewTotal}, {CurrPreb,_Progress,_Total,Errors}) ->
-    %% Clear last two lines from screen
-    io:format("\033[J"),
-    NextPreb = CurrPreb + 1,
-    {ok, {NextPreb,-1,NewTotal,Errors}};
-handle_event({progress_swap, _NewTotal}, 'noprogress') ->
+
+handle_event({'remaining', Remain}, {NumChecked, NumRemain, NumErrors}) ->
+    State = {NumChecked, NumRemain+Remain, NumErrors},
+    {ok, State};
+handle_event({'remaining', _Remain}, 'noprogress') ->
     {ok, 'noprogress'}.
 
-progress_bar(CurrPreb, PerCent, Errors) ->
-    Bar = string:chars($=, PerCent div 2, ">"),
-    StrPerCent = io_lib:format("~p", [PerCent]),
-    io:format("Preemption: ~p\n"
-        " ~3s% [~.51s]  ~p errors found"
-        "\033[1A\r",
-        [CurrPreb, StrPerCent, Bar, Errors]).
+progress_bar({NumChecked, NumRemain, NumErrors}) ->
+    io:format("\033[1A\r[ ~p Checked, ~p Remaining, ~p Errors ]\n",
+        [NumChecked, NumRemain, NumErrors]).

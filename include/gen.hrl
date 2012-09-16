@@ -33,9 +33,7 @@
 -define(NT_LID, '_._lid').
 -define(NT_PID, '_._pid').
 -define(NT_REF, '_._ref').
--define(NT_STATE1, '_._state1').
--define(NT_STATE2, '_._state2').
--define(NT_STATELEN, '_._state_len').
+-define(NT_STATE, '_._state').
 -define(NT_USED, '_._used').
 
 %% Instrumented message atom.

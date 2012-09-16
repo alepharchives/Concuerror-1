@@ -82,6 +82,8 @@ terminate(_Reason, _State) ->
 handle_event({msg, String}, State) ->
     wxTextCtrl:appendText(ref_lookup(?LOG_TEXT), String),
     {ok, State};
+handle_event({error, 'no_error'}, State) ->
+    {ok, State};
 handle_event({error, Ticket}, State) ->
     Error = ticket:get_error(Ticket),
     ErrorItem = util:flat_format("~s~n~s", [error:type(Error),
@@ -90,9 +92,7 @@ handle_event({error, Ticket}, State) ->
     wxControlWithItems:append(List, ErrorItem),
     addListData(?ERROR_LIST, [Ticket]),
     {ok, State};
-handle_event({progress_log, _Remain}, State) ->
-    {ok, State};
-handle_event({progress_swap, _NewState}, State) ->
+handle_event({'remaining', _Remain}, State) ->
     {ok, State}.
 
 %%%----------------------------------------------------------------------
