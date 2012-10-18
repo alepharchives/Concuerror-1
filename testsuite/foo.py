@@ -51,11 +51,23 @@ def runTest(test):
 def runScenario(suite, name, modn, funn, preb, files):
     global concuerror
     global results
+    global dirname
     # Run concuerror
     os.system("%s --target %s %s --files %s --output %s/%s/%s-%s-%s.txt --preb %s --quiet"
             % (concuerror, modn, funn, ' '.join(files), results, suite, name,
                funn, preb, preb))
-    print (suite, name, modn, funn, preb, files)
+    try:
+        subprocess.check_call(("diff -I '<[0-9]\+\.[0-9]\+\.[0-9]\+>' " +
+                               "-I '#Ref<[0-9\.]\+>' " +
+                               "-uw %s/suites/%s/results/%s-%s-%s.txt " +
+                               "%s/%s/%s-%s-%s.txt") % \
+                              (dirname, suite, name, funn, preb, results, suite, name, funn, preb),
+                              shell=True, stdout=open('/dev/null', 'w'), stderr=subprocess.STDOUT)
+        print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
+                (suite, name, "("+funn+", "+preb+")")
+    except subprocess.CalledProcessError:
+        print "%-10s %-20s %-40s  \033[01;31mfailed\033[00m" % \
+                (suite, name, "("+funn+", "+preb+")")
 
 
 #---------------------------------------------------------------------
