@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
-import sys
 import os
+import re
+import sys
 import glob
-import subprocess
 import difflib
+import subprocess
 from multiprocessing import Process, Lock, BoundedSemaphore
 
 
@@ -87,10 +88,24 @@ def isDiff(a, b):
         return True
 
 def ignoreLines(line):
-    return False
+    global match_pids
+    global match_refs
+    if not re.search(match_pids, line):
+        print line, "Here 1"
+        return True
+    elif not re.search(match_refs, line):
+        print line, "Here 2"
+        return True
+    else:
+        print line, "Here 3"
+        return False
 
 #---------------------------------------------------------------------
 # Main program
+
+# Compile some regular expressions
+match_pids = re.compile("<\d+\.\d+\.\d+>")
+match_refs = re.compile("#Ref<.*>")
 
 # Get the directory of Concuerror's testsuite
 dirname = os.path.normpath(os.path.dirname(sys.argv[0]))
