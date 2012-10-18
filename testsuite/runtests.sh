@@ -8,19 +8,19 @@ prevDir=`pwd`
 # Args:
 #   $1   : Test
 runTest() {
-    local temp=(`echo $1 | sed -e 's/suites\/\(\w\+\)\/src\/\(\w\+\)\(\.erl\)\?/\1 \2/'`)
-    local suite="${temp[0]}"
-    local name="${temp[1]}"
-    if [ -d $test ]; then
+    local temp1=(`echo $1 | sed -e 's/suites\/\(\w\+\)\/src\/\(\w\+\)\(\.erl\)\?/\1 \2/'`)
+    local suite="${temp1[0]}"
+    local name="${temp1[1]}"
+    if [ -d $1 ]; then
         # Our test is a multi module directory
-        local dir=$test
+        local dir=$1
         local mod="test"
         local files=(`ls $dir/*.erl`)
     else
         # Our test is a single module file
-        local dir=${test%/*}
+        local dir=${1%/*}
         local mod=$name
-        local files=$test
+        local files=$1
     fi
     # Create a dir to save the results
     mkdir -p $results/$suite
@@ -31,10 +31,11 @@ runTest() {
     local line
     for line in ${scenarios//\\n/ }; do
         # Get function and preemption bound
-        unset temp
-        temp=(`echo $line | sed -e 's/{\w\+,\(\w\+\),\(\w\+\)}/\1 \2/'`)
+        local temp2=(`echo $line | sed -e 's/{\w\+,\(\w\+\),\(\w\+\)}/\1 \2/'`)
+        local fun="${temp2[0]}"
+        local preb="${temp2[1]}"
         # And run the test
-        runScenario "$suite" "$name" "$mod" "${temp[0]}" "${temp[1]}" "${files[@]}" &
+        runScenario "$suite" "$name" "$mod" "$fun" "$preb" "${files[@]}" &
     done
     wait
 }
@@ -57,11 +58,11 @@ runScenario() {
         -uw suites/$1/results/$2-$4-$5.txt \
         $results/$1/$2-$4-$5.txt &> /dev/null
     if [ $? -eq 0 ]; then
-        printf "%-10s %-20s %-35s %-5s  \033[01;32mok\033[00m\n" \
-            "$1" "$2" "$4" "$5"
+        printf "%-10s %-20s %-30s  \033[01;32mok\033[00m\n" \
+            "$1" "$2" "($4, $5)"
     else
-        printf "%-10s %-20s %-35s %-5s  \033[01;31mfailed\033[00m\n" \
-            "$1" "$2" "$4" "$5"
+        printf "%-10s %-20s %-30s  \033[01;31mfailed\033[00m\n" \
+            "$1" "$2" "($4, $5)"
     fi
 }
 
