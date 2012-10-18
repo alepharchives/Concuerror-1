@@ -4,6 +4,7 @@ import sys
 import os
 import glob
 import subprocess
+import difflib
 from multiprocessing import Process, Lock, BoundedSemaphore
 
 
@@ -59,26 +60,34 @@ def runScenario(sema, suite, name, modn, funn, preb, files):
     global concuerror
     global results
     global dirname
-    IGNORE = open('/dev/null', 'w')
     sema.acquire()
     # Run concuerror
     os.system("%s --target %s %s --files %s --output %s/%s/%s-%s-%s.txt --preb %s --quiet"
             % (concuerror, modn, funn, ' '.join(files), results, suite, name,
                funn, preb, preb))
-    try:
-        subprocess.check_call(("diff -I '<[0-9]\+\.[0-9]\+\.[0-9]\+>' " +
-                               "-I '#Ref<[0-9\.]\+>' " +
-                               "-uw %s/suites/%s/results/%s-%s-%s.txt " +
-                               "%s/%s/%s-%s-%s.txt") % \
-                              (dirname, suite, name, funn, preb, results, suite, name, funn, preb),
-                              shell=True, stdout=IGNORE, stderr=IGNORE)
-        print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
-                (suite, name, "("+funn+", "+preb+")")
-    except subprocess.CalledProcessError:
+    a = "%s/suites/%s/results/%s-%s-%s.txt" % (dirname, suite, name, funn, preb)
+    b = "%s/%s/%s-%s-%s.txt" % (results, suite, name, funn, preb)
+    if isDiff(a, b):
         print "%-10s %-20s %-40s  \033[01;31mfailed\033[00m" % \
                 (suite, name, "("+funn+", "+preb+")")
+    else:
+        print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
+                (suite, name, "("+funn+", "+preb+")")
     sema.release()
-    IGNORE.close()
+
+def isDiff(a, b):
+    try:
+        diff = difflib.SequenceMatcher(ignoreLines,
+                open(a).readlines(), open(b).readlines())
+        if diff.ratio() == 1.0:
+            return False
+        else:
+            return True
+    except:
+        return True
+
+def ignoreLines(line):
+    return False
 
 #---------------------------------------------------------------------
 # Main program
@@ -105,7 +114,7 @@ else:
 
 # For every test do
 procT = []
-sema = BoundedSemaphore(2)
+sema = BoundedSemaphore(2000)
 for test in tests:
     p = Process(target=runTest, args=(sema, test))
     p.start()
