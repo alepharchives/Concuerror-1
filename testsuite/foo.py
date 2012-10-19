@@ -69,10 +69,10 @@ def runScenario(sema, suite, name, modn, funn, preb, files):
     b = "%s/%s/%s-%s-%s.txt" % (results, suite, name, funn, preb)
     if equalResults(a, b):
         print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
-                (suite, name, "("+funn+", "+preb+")")
+                (suite, name, "("+funn+",  "+preb+")")
     else:
         print "%-10s %-20s %-40s  \033[01;31mfailed\033[00m" % \
-                (suite, name, "("+funn+", "+preb+")")
+                (suite, name, "("+funn+",  "+preb+")")
     sema.release()
 
 def equalResults(f1, f2):
@@ -130,6 +130,13 @@ if len(sys.argv) > 1:
     tests = [item.rstrip('/') for item in tests] 
 else:
     tests = glob.glob(dirname + "/suites/*/src/*")
+
+# Print header
+print "Concuerror's Testsuite\n"
+print "%-10s %-20s %-40s  %s" % \
+        ("Suite", "Test", "(Function,  Preemption Bound)", "Result")
+print "---------------------------------------" + \
+      "------------------------------------------"
 
 # For every test do
 procT = []
