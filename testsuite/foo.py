@@ -4,7 +4,6 @@ import os
 import re
 import sys
 import glob
-import difflib
 import subprocess
 from multiprocessing import Process, Lock, BoundedSemaphore
 
@@ -68,44 +67,49 @@ def runScenario(sema, suite, name, modn, funn, preb, files):
                funn, preb, preb))
     a = "%s/suites/%s/results/%s-%s-%s.txt" % (dirname, suite, name, funn, preb)
     b = "%s/%s/%s-%s-%s.txt" % (results, suite, name, funn, preb)
-    if isDiff(a, b):
-        print "%-10s %-20s %-40s  \033[01;31mfailed\033[00m" % \
+    if equalResults(a, b):
+        print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
                 (suite, name, "("+funn+", "+preb+")")
     else:
-        print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
+        print "%-10s %-20s %-40s  \033[01;31mfailed\033[00m" % \
                 (suite, name, "("+funn+", "+preb+")")
     sema.release()
 
-def isDiff(a, b):
+def equalResults(f1, f2):
     try:
-        diff = difflib.SequenceMatcher(ignoreLines,
-                open(a).readlines(), open(b).readlines())
-        if diff.ratio() == 1.0:
-            return False
-        else:
-            return True
-    except:
-        return True
-
-def ignoreLines(line):
-    global match_pids
-    global match_refs
-    if not re.search(match_pids, line):
-        print line, "Here 1"
-        return True
-    elif not re.search(match_refs, line):
-        print line, "Here 2"
-        return True
-    else:
-        print line, "Here 3"
+        fp1 = open(f1, 'r')
+    except IOError:
         return False
+    try:
+        fp2 = open(f2, 'r')
+    except IOError:
+        fp1.close()
+        return False
+    while True:
+        l1 = fp1.readline()
+        l2 = fp2.readline()
+        if (l1 != l2) and (not ignoreLine(l1)):
+            fp1.close(); fp2.close()
+            return False
+        if not l1:
+            fp1.close(); fp2.close()
+            return True
+
+def ignoreLine(line):
+    global ignore_matches
+    for match in ignore_matches:
+        if re.search(match, line):
+            return True
+    return False
 
 #---------------------------------------------------------------------
 # Main program
 
 # Compile some regular expressions
 match_pids = re.compile("<\d+\.\d+\.\d+>")
-match_refs = re.compile("#Ref<.*>")
+match_refs = re.compile("#Ref<[\d\.]+>")
+match_file = re.compile("suites/.+/src/.*\.erl")
+ignore_matches = [match_pids, match_refs, match_file]
 
 # Get the directory of Concuerror's testsuite
 dirname = os.path.normpath(os.path.dirname(sys.argv[0]))
