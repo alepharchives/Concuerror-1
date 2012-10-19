@@ -5,13 +5,14 @@ import re
 import sys
 import glob
 import subprocess
-from multiprocessing import Process, Lock, BoundedSemaphore
+from ctypes import c_int
+from multiprocessing import Process, Lock, Value, BoundedSemaphore
 
 
 #---------------------------------------------------------------------
 # Extract scenarios from the specified test
 
-def runTest(sema, test):
+def runTest(test):
     global dirname
     global results
     # test has the format of '.*/suites/<suite_name>/src/<test_name>(.erl)?'
@@ -45,7 +46,7 @@ def runTest(sema, test):
         scen = scenario.strip("{}\n").split(",")
         # And run the test
         p = Process(target=runScenario,
-                args=(sema, suite, name, modn, scen[1], scen[2], files))
+                args=(suite, name, modn, scen[1], scen[2], files))
         p.start()
         procS.append(p)
     pout.stdout.close()
@@ -56,24 +57,35 @@ def runTest(sema, test):
 #---------------------------------------------------------------------
 # Run the specified scenario and print the results
 
-def runScenario(sema, suite, name, modn, funn, preb, files):
+def runScenario(suite, name, modn, funn, preb, files):
     global concuerror
     global results
     global dirname
+    global sema
+    global lock
+    global total_tests
+    global total_failed
     sema.acquire()
     # Run concuerror
     os.system("%s --target %s %s --files %s --output %s/%s/%s-%s-%s.txt --preb %s --quiet"
             % (concuerror, modn, funn, ' '.join(files), results, suite, name,
                funn, preb, preb))
+    # Compare the results
     a = "%s/suites/%s/results/%s-%s-%s.txt" % (dirname, suite, name, funn, preb)
     b = "%s/%s/%s-%s-%s.txt" % (results, suite, name, funn, preb)
-    if equalResults(a, b):
+    equalRes = equalResults(a, b)
+    sema.release()
+    # Print the results
+    lock.acquire()
+    total_tests.value += 1
+    if equalRes:
         print "%-10s %-20s %-40s  \033[01;32mok\033[00m" % \
                 (suite, name, "("+funn+",  "+preb+")")
     else:
+        total_failed.value += 1
         print "%-10s %-20s %-40s  \033[01;31mfailed\033[00m" % \
                 (suite, name, "("+funn+",  "+preb+")")
-    sema.release()
+    lock.release()
 
 def equalResults(f1, f2):
     try:
@@ -138,16 +150,28 @@ print "%-10s %-20s %-40s  %s" % \
 print "---------------------------------------" + \
       "------------------------------------------"
 
+# Create share integers to count tests and
+# a lock to protect printings
+lock = Lock()
+total_tests = Value(c_int, 0, lock=False)
+total_failed = Value(c_int, 0, lock=False)
+
 # For every test do
 procT = []
 sema = BoundedSemaphore(2000)
 for test in tests:
-    p = Process(target=runTest, args=(sema, test))
+    p = Process(target=runTest, args=(test,))
     p.start()
     procT.append(p)
 # Wait
 for p in procT:
     p.join()
+
+# Print overview
+print "\nOVERALL SUMMARY for test run"
+print "  %d total tests, which gave rise to" % len(tests)
+print "  %d test cases, of which" % total_tests.value
+print "  %d caused unexpected failures" % total_failed.value
 
 # Cleanup temp files
 os.system("find %s -name '*.beam' -exec rm {} \;" % dirname)
