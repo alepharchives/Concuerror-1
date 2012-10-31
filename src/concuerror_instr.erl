@@ -118,14 +118,13 @@ delete_and_purge(Files) ->
     {'ok', [mfb()]} | 'error'.
 
 instrument_and_compile(Files, Includes, Defines) ->
-    Parent = self(),
     InstrOne =
         fun(File) ->
             instrument_and_compile_one(File,Includes,Defines)
         end,
     MFBs = concuerror_util:pmap(InstrOne, Files),
-    case lists:any('error', MFBs) of
-        true -> error;
+    case lists:member('error', MFBs) of
+        true  -> error;
         false -> {ok, MFBs}
     end.
 
@@ -163,7 +162,6 @@ instrument_and_compile_one(File, Includes, Defines) ->
         {error, Errors, Warnings} ->
             log_error_list(Errors),
             log_warning_list(Warnings),
-            concuerror_log:log("error~n"),
             error
     end.
 
