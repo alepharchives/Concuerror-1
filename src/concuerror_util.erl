@@ -14,7 +14,7 @@
 
 -module(concuerror_util).
 -export([doc/1, test/0, flat_format/2, flush_mailbox/0,
-         is_erl_source/1, funs/1, funs/2, funLine/3]).
+         is_erl_source/1, funs/1, funs/2, funLine/3, pmap/2]).
 
 -include_lib("kernel/include/file.hrl").
 -include("gen.hrl").
@@ -157,3 +157,10 @@ getFunLine([Node|Rest], Function, Arity) ->
             end;
         _Other -> getFunLine(Rest, Function, Arity)
     end.
+
+%% A concurrent map
+-spec pmap(fun((term()) -> term()), [term()]) -> [term()].
+pmap(Fun, List) ->
+    Parent = self(),
+    Pids = [spawn(fun() -> Parent ! Fun(L) end) || L <- List],
+    [receive Ret -> Ret end || _Pid <- Pids].
