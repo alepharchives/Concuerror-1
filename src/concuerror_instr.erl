@@ -23,7 +23,7 @@
 %%% Debug
 %%%----------------------------------------------------------------------
 
-%%-define(PRINT, true).
+-define(PRINT, true).
 -ifdef(PRINT).
 -define(print(S_), io:put_chars(erl_prettypr:format(S_))).
 -else.
@@ -34,52 +34,73 @@
 %%% Definitions
 %%%----------------------------------------------------------------------
 
+%% Callback function mapping.
+%% The callback functions should be in `concuerror_rep' module.
+%% Each callback function should take as arguments:
+%%   1: A tupple representing the module, function and arity
+%%   2: A tupple representing the file and the source line
+%%   3: A list with the arguments
+%% For most of the cases rep_generic should be sufficient
+-define(INSTR_MOD_FUN,
+    %% Auto-imported functions of 'erlang' module.
+    [{{erlang, demonitor, 1},           rep_generic},
+     {{demonitor, 1},                   rep_generic},
+     {{erlang, demonitor, 2},           rep_generic},
+     {{demonitor, 2},                   rep_generic},
+     {{erlang, halt, 0},                rep_halt},
+     {{halt, 0},                        rep_halt},
+     {{erlang, halt, 1},                rep_halt},
+     {{halt, 1},                        rep_halt},
+     {{erlang, is_process_alive, 1},    rep_generic},
+     {{is_process_alive, 1},            rep_generic},
+     {{erlang, link, 1},                rep_generic},
+     {{link, 1},                        rep_generic},
+     {{erlang, monitor, 2},             rep_generic},
+     {{monitor, 2},                     rep_generic},
+     {{erlang, process_flag, 2},        rep_process_flag},
+     {{process_flag, 2},                rep_process_flag},
+     {{erlang, register, 2},            rep_generic},
+     {{register, 2},                    rep_generic},
+     {{erlang, spawn, 1},               rep_spawn},
+     {{spawn, 1},                       rep_spawn},
+     {{erlang, spawn, 3},               rep_spawn},
+     {{spawn, 3},                       rep_spawn},
+     {{erlang, spawn_link, 1},          rep_spawn},
+     {{spawn_link, 1},                  rep_spawn},
+     {{erlang, spawn_link, 3},          rep_spawn},
+     {{spawn_link, 3},                  rep_spawn},
+     {{erlang, spawn_monitor, 1},       rep_spawn},
+     {{spawn_monitor, 1},               rep_spawn},
+     {{erlang, spawn_monitor, 3},       rep_spawn},
+     {{spawn_monitor, 3},               rep_spawn},
+     {{erlang, spawn_opt, 2},           rep_spawn},
+     {{spawn_opt, 2},                   rep_spawn},
+     {{erlang, spawn_opt, 4},           rep_spawn},
+     {{spawn_opt, 4},                   rep_spawn},
+     {{erlang, unlink, 1},              rep_generic},
+     {{unlink, 1},                      rep_generic},
+     {{erlang, unregister, 1},          rep_generic},
+     {{unregister, 1},                  rep_generic},
+     {{erlang, whereis, 1},             rep_generic},
+     {{whereis, 1},                     rep_generic},
+     {{erlang, send, 2},                rep_send},
+     {{erlang, send, 3},                rep_send},
+    %% Functions from ets module.
+     {{ets, new, 2},                    rep_generic},
+     {{ets, insert_new, 2},             rep_generic},
+     {{ets, lookup, 2},                 rep_generic},
+     {{ets, select_delete, 2},          rep_generic},
+     {{ets, insert, 2},                 rep_generic},
+     {{ets, delete, 1},                 rep_generic},
+     {{ets, delete, 2},                 rep_generic},
+     {{ets, match_object, 1},           rep_generic},
+     {{ets, match_object, 2},           rep_generic},
+     {{ets, match_object, 3},           rep_generic},
+     {{ets, foldl, 3},                  rep_generic}
+    ]).
+
 %% List of attributes that should be stripped.
 -define(ATTR_STRIP, [type, spec, opaque, export_type, import_type]).
-
-%% Instrumented auto-imported functions of 'erlang' module.
--define(INSTR_ERL_FUN,
-        [{demonitor, 1},
-         {demonitor, 2},
-         {halt, 0},
-         {halt, 1},
-         {is_process_alive, 1},
-         {link, 1},
-         {monitor, 2},
-         {process_flag, 2},
-         {register, 2},
-         {spawn, 1},
-         {spawn, 3},
-         {spawn_link, 1},
-         {spawn_link, 3},
-         {spawn_monitor, 1},
-         {spawn_monitor, 3},
-         {spawn_opt, 2},
-         {spawn_opt, 4},
-         {unlink, 1},
-         {unregister, 1},
-         {whereis, 1}]).
-
-%% Instrumented functions called as erlang:FUNCTION.
--define(INSTR_ERL_MOD_FUN,
-        [{erlang, send, 2}, {erlang, send, 3}] ++
-            [{erlang, F, A} || {F, A} <- ?INSTR_ERL_FUN]).
-
-%% Instrumented functions from ets module.
--define(INSTR_ETS_FUN,
-        [{ets, insert_new, 2},
-         {ets, lookup, 2},
-         {ets, select_delete, 2},
-         {ets, insert, 2},
-         {ets, delete, 1},
-         {ets, delete, 2},
-         {ets, match_object, 1},
-         {ets, match_object, 3},
-         {ets, match_delete, 2},
-         {ets, foldl, 3}]).
-
-%% Instrumented mod:fun.
--define(INSTR_MOD_FUN, ?INSTR_ERL_MOD_FUN ++ ?INSTR_ETS_FUN).
 
 %% Module containing replacement functions.
 -define(REP_MOD, concuerror_rep).
@@ -240,7 +261,7 @@ instrument_term(Tree) ->
         application ->
             case get_mfa(Tree) of
                 no_instr -> Tree;
-                {normal, Mfa} -> instrument_application(Mfa);
+                {normal, Entry, ArgTree} -> instrument_application(Entry, ArgTree);
                 {var, Mfa} -> instrument_var_application(Mfa)
             end;
         infix_expr ->
@@ -254,15 +275,16 @@ instrument_term(Tree) ->
         _Other -> Tree
     end.
 
-%% Return {ModuleAtom, FunctionAtom, [ArgTree]} for a function call that
+%% Return a tupple (member of ?INSTR_MOD_FUN) for a function call that
 %% is going to be instrumented or 'no_instr' otherwise.
 get_mfa(Tree) ->
     Qualifier = erl_syntax:application_operator(Tree),
     ArgTrees  = erl_syntax:application_arguments(Tree),
+    Arity     = length(ArgTrees),
     case erl_syntax:type(Qualifier) of
         atom ->
             Function = erl_syntax:atom_value(Qualifier),
-            needs_instrument(Function, ArgTrees);
+            needs_instrument({Function, Arity}, ArgTrees);
         module_qualifier ->
             ModTree = erl_syntax:module_qualifier_argument(Qualifier),
             FunTree = erl_syntax:module_qualifier_body(Qualifier),
@@ -271,7 +293,7 @@ get_mfa(Tree) ->
                 true ->
                     Module = erl_syntax:atom_value(ModTree),
                     Function = erl_syntax:atom_value(FunTree),
-                    needs_instrument(Module, Function, ArgTrees);
+                    needs_instrument({Module, Function, Arity}, ArgTrees);
                 false -> {var, {ModTree, FunTree, ArgTrees}}
             end;
         _Other -> no_instr
@@ -287,32 +309,26 @@ has_atoms_only(Tree) ->
            lists:all(IsAtom, erl_syntax:qualified_name_segments(Tree))).
 
 
-%% Determine whether an auto-exported BIF call needs instrumentation.
-needs_instrument(Function, ArgTrees) ->
-    Arity = length(ArgTrees),
-    case lists:member({Function, Arity}, ?INSTR_ERL_FUN) of
-        true -> {normal, {erlang, Function, ArgTrees}};
-        false -> no_instr
+%% Determine whether a function call needs instrumentation.
+needs_instrument({Fun, Arity}=Key, ArgTrees) ->
+    case lists:keyfind(Key, 1, ?INSTR_MOD_FUN) of
+        false -> no_instr;
+        {_Key, RepFun} ->
+            {normal, {{erlang, Fun, Arity}, RepFun}, ArgTrees}
+    end;
+needs_instrument(Key, ArgTrees) ->
+    case lists:keyfind(Key, 1, ?INSTR_MOD_FUN) of
+        false -> no_instr;
+        Elem -> {normal, Elem, ArgTrees}
     end.
 
-%% Determine whether a `foo:bar(...)` call needs instrumentation.
-needs_instrument(Module, Function, ArgTrees) ->
-    Arity = length(ArgTrees),
-    case lists:member({Module, Function, Arity}, ?INSTR_MOD_FUN) of
-        true -> {normal, {Module, Function, ArgTrees}};
-        false -> no_instr
-    end.
-
-instrument_application({erlang, Function, ArgTrees}) ->
+instrument_application({Key, RepAtom}, ArgTrees) ->
     RepMod = erl_syntax:atom(?REP_MOD),
-    RepFun = erl_syntax:atom(list_to_atom("rep_" ++ atom_to_list(Function))),
-    erl_syntax:application(RepMod, RepFun, ArgTrees);
-instrument_application({Module, Function, ArgTrees}) ->
-    RepMod = erl_syntax:atom(?REP_MOD),
-    RepFun = erl_syntax:atom(list_to_atom("rep_" ++ atom_to_list(Module)
-                                          ++ "_"
-                                          ++ atom_to_list(Function))),
-    erl_syntax:application(RepMod, RepFun, ArgTrees).
+    RepFun = erl_syntax:atom(RepAtom),
+    PosArg = erl_syntax:abstract(0),
+    KeyArg = erl_syntax:abstract(Key),
+    RestArgs = erl_syntax:list(ArgTrees),
+    erl_syntax:application(RepMod, RepFun, [PosArg, KeyArg, RestArgs]).
 
 instrument_var_application({ModTree, FunTree, ArgTrees}) ->
     RepMod = erl_syntax:atom(?REP_MOD),
