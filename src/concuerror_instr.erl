@@ -328,7 +328,7 @@ instrument_application({Key, RepAtom}, ArgTrees) ->
     PosArg = erl_syntax:abstract(0),
     KeyArg = erl_syntax:abstract(Key),
     RestArgs = erl_syntax:list(ArgTrees),
-    erl_syntax:application(RepMod, RepFun, [PosArg, KeyArg, RestArgs]).
+    erl_syntax:application(RepMod, RepFun, [KeyArg, PosArg, RestArgs]).
 
 instrument_var_application({ModTree, FunTree, ArgTrees}) ->
     RepMod = erl_syntax:atom(?REP_MOD),
@@ -418,7 +418,8 @@ instrument_receive(Tree) ->
             AfterBlock = erl_syntax:block_expr(Action),
             ModTree = erl_syntax:atom(?REP_MOD),
             FunTree = erl_syntax:atom(rep_receive_block),
-            Fun = erl_syntax:application(ModTree, FunTree, []),
+            PosArg = erl_syntax:abstract(0),
+            Fun = erl_syntax:application(ModTree, FunTree, [PosArg]),
             transform_receive_timeout(Fun, AfterBlock, Timeout);
         _Other ->
             NewClauses = transform_receive_clauses(OldClauses),
@@ -431,7 +432,8 @@ instrument_receive(Tree) ->
             %% Create ?REP_MOD:rep_receive(fun(X) -> ...).
             Module = erl_syntax:atom(?REP_MOD),
             Function = erl_syntax:atom(rep_receive),
-            RepReceive = erl_syntax:application(Module, Function, [FunExpr]),
+            PosArg = erl_syntax:abstract(0),
+            RepReceive = erl_syntax:application(Module, Function, [PosArg, FunExpr]),
             %% Create new receive expression.
             NewReceive = erl_syntax:receive_expr(NewClauses),
             %% Result is begin rep_receive(...), NewReceive end.
@@ -445,7 +447,8 @@ instrument_receive(Tree) ->
                     Action = erl_syntax:receive_expr_action(Tree),
                     RepMod = erl_syntax:atom(?REP_MOD),
                     RepFun = erl_syntax:atom(rep_after_notify),
-                    RepApp = erl_syntax:application(RepMod, RepFun, []),
+                    PosArg = erl_syntax:abstract(0),
+                    RepApp = erl_syntax:application(RepMod, RepFun, [PosArg]),
                     NewAction = [RepApp|Action],
                     %% receive NewPatterns -> NewActions after 0 -> NewAfter end
                     ZeroTimeout = erl_syntax:integer(0),
@@ -492,7 +495,8 @@ transform_receive_clause_regular(Clause) ->
     NewPattern = [erl_syntax:tuple([InstrAtom, PidVar, OldPattern])],
     Module = erl_syntax:atom(?REP_MOD),
     Function = erl_syntax:atom(rep_receive_notify),
-    Arguments = [PidVar, OldPattern],
+    PosArg = erl_syntax:abstract(0),
+    Arguments = [PosArg, PidVar, OldPattern],
     Notify = erl_syntax:application(Module, Function, Arguments),
     NewBody = [Notify|OldBody],
     erl_syntax:clause(NewPattern, OldGuard, NewBody).
@@ -507,7 +511,8 @@ transform_receive_clause_special(Clause) ->
     OldBody = erl_syntax:clause_body(Clause),
     Module = erl_syntax:atom(?REP_MOD),
     Function = erl_syntax:atom(rep_receive_notify),
-    Arguments = [OldPattern],
+    PosArg = erl_syntax:abstract(0),
+    Arguments = [PosArg, OldPattern],
     Notify = erl_syntax:application(Module, Function, Arguments),
     NewBody = [Notify|OldBody],
     erl_syntax:clause([OldPattern], OldGuard, NewBody).
@@ -530,7 +535,9 @@ instrument_send(Tree) ->
     Function = erl_syntax:atom(rep_send),
     Dest = erl_syntax:infix_expr_left(Tree),
     Msg = erl_syntax:infix_expr_right(Tree),
-    Arguments = [Dest, Msg],
+    PosArg = erl_syntax:abstract(0),
+    KeyArg = erl_syntax:abstract({erlang, send, 2}),
+    Arguments = [KeyArg, PosArg, erl_syntax:list([Dest, Msg])],
     erl_syntax:application(Module, Function, Arguments).
 
 %%%----------------------------------------------------------------------

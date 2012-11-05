@@ -417,14 +417,6 @@ handler(block, Lid,
     NewBlocked = ?SETS:add_element(Lid, Blocked),
     Context#context{active=NewActive, blocked=NewBlocked, actions=NewActions};
 
-handler(demonitor, Lid, #context{actions=Actions}=Context, _Ref) ->
-    %% TODO: Get LID from Ref?
-    TargetLid = concuerror_lid:mock(0),
-    Action = {demonitor, Lid, TargetLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
 %% Remove the exited process from the active set.
 %% NOTE: This is called after a process has exited, not when it calls
 %%       exit/1 or exit/2.
@@ -449,42 +441,11 @@ handler(exit, Lid, #context{active = Active, actions = Actions} = Context,
     end;
 
 %% Return empty active and blocked queues to force run termination.
-handler(halt, Lid, #context{actions = Actions}=Context, Misc) ->
-    Action =
-        case Misc of
-            empty  -> {halt, Lid};
-            Status -> {halt, Lid, Status}
-        end,
+handler({_Mod, halt, _Arity}=Key, Lid, #context{actions = Actions}=Context, Misc) ->
+    Action = {Key, Lid, Misc},
     NewActions = [Action | Actions],
     ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
     Context#context{active=?SETS:new(),blocked=?SETS:new(),actions=NewActions};
-
-handler(is_process_alive, Lid, #context{actions=Actions}=Context, TargetPid) ->
-    TargetLid = concuerror_lid:from_pid(TargetPid),
-    Action = {is_process_alive, Lid, TargetLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
-handler(link, Lid, #context{actions = Actions}=Context, TargetPid) ->
-    TargetLid = concuerror_lid:from_pid(TargetPid),
-    Action = {link, Lid, TargetLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
-handler(monitor, Lid, #context{actions = Actions}=Context, {Item, _Ref}) ->
-    TargetLid = concuerror_lid:from_pid(Item),
-    Action = {monitor, Lid, TargetLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
-handler(process_flag, Lid, #context{actions=Actions}=Context, {Flag, Value}) ->
-    Action = {process_flag, Lid, Flag, Value},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
 
 %% Normal receive message handler.
 handler('receive', Lid, #context{actions = Actions}=Context, {From, Msg}) ->
@@ -501,90 +462,18 @@ handler('receive_no_instr', Lid, #context{actions = Actions}=Context, Msg) ->
     ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
     Context#context{actions = NewActions};
 
-handler(register, Lid, #context{actions=Actions}=Context, {RegName, RegLid}) ->
-    Action = {register, Lid, RegName, RegLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
-handler(send, Lid, #context{actions = Actions}=Context, {DstPid, Msg}) ->
-    DstLid = concuerror_lid:from_pid(DstPid),
-    Action = {send, Lid, DstLid, Msg},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
 %% Link the newly spawned process to the scheduler process and add it to the
 %% active set.
-handler(spawn, ParentLid,
-        #context{active= Active, actions = Actions} = Context, ChildPid) ->
+handler({_Mod, Spawn, _Arity} = Key, ParentLid,
+        #context{active= Active, actions = Actions} = Context, {Args, ChildPid})
+  when Spawn == spawn; Spawn == spawn_link; Spawn == spawn_monitor; Spawn == spawn_opt ->
     link(ChildPid),
     ChildLid = concuerror_lid:new(ChildPid, ParentLid),
-    Action = {spawn, ParentLid, ChildLid},
+    Action = {Key, ParentLid, {Args, ChildLid}},
     NewActions = [Action | Actions],
     ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
     NewActive = ?SETS:add_element(ChildLid, Active),
     Context#context{active = NewActive, actions = NewActions};
-
-%% FIXME: Refactor this (it's exactly the same as 'spawn')
-handler(spawn_link, ParentLid,
-        #context{active = Active, actions = Actions} = Context, ChildPid) ->
-    link(ChildPid),
-    ChildLid = concuerror_lid:new(ChildPid, ParentLid),
-    Action = {spawn_link, ParentLid, ChildLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive, actions = NewActions};
-
-%% FIXME: Refactor this (it's almost the same as 'spawn')
-handler(spawn_monitor, ParentLid,
-        #context{active=Active, actions=Actions}=Context, {ChildPid, _Ref}) ->
-    link(ChildPid),
-    ChildLid = concuerror_lid:new(ChildPid, ParentLid),
-    Action = {spawn_monitor, ParentLid, ChildLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive, actions = NewActions};
-
-%% Similar to above depending on options.
-handler(spawn_opt, ParentLid,
-        #context{active=Active, actions=Actions}=Context, {Ret, Opt}) ->
-    {ChildPid, _Ref} =
-        case Ret of
-            {_C, _R} = CR -> CR;
-            C -> {C, noref}
-        end,
-    link(ChildPid),
-    ChildLid = concuerror_lid:new(ChildPid, ParentLid),
-    Opts = sets:to_list(sets:intersection(sets:from_list([link, monitor]),
-                                          sets:from_list(Opt))),
-    Action = {spawn_opt, ParentLid, ChildLid, Opts},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    NewActive = ?SETS:add_element(ChildLid, Active),
-    Context#context{active = NewActive, actions = NewActions};
-
-handler(unlink, Lid, #context{actions = Actions}=Context, TargetPid) ->
-    TargetLid = concuerror_lid:from_pid(TargetPid),
-    Action = {unlink, Lid, TargetLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
-handler(unregister, Lid, #context{actions = Actions}=Context, RegName) ->
-    Action = {unregister, Lid, RegName},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
-
-handler(whereis, Lid, #context{actions = Actions}=Context, {RegName, Result}) ->
-    ResultLid = concuerror_lid:from_pid(Result),
-    Action = {whereis, Lid, RegName, ResultLid},
-    NewActions = [Action | Actions],
-    ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
-    Context#context{actions = NewActions};
 
 %% Handler for anything "non-special". It just passes the arguments
 %% for logging.
