@@ -25,58 +25,21 @@
 -define(PRINT_DEPTH, 4).
 -define(PRINT_DEPTH_EXIT, 10).
 
-%%%----------------------------------------------------------------------
-%%% Types
-%%%----------------------------------------------------------------------
-
--type maybe_lid() :: concuerror_lid:lid() | 'not_found'.
-
--type spawn_opt_opts() :: ['link' | 'monitor'].
-
-%% Tuples providing information about a process' action.
--type proc_action() :: {'after', concuerror_lid:lid()} |
-                       {'block', concuerror_lid:lid()} |
-                       {'demonitor', concuerror_lid:lid(), maybe_lid()} |
-                       {'exit', concuerror_lid:lid(), term()} |
-                       {'fun_exit', concuerror_lid:lid(), maybe_lid(), term()} |
-                       {'halt', concuerror_lid:lid()} |
-                       {'halt', concuerror_lid:lid(),
-                                    non_neg_integer() | string()} |
-                       {'is_process_alive', concuerror_lid:lid(), maybe_lid()} |
-                       {'link', concuerror_lid:lid(), maybe_lid()} |
-                       {'monitor', concuerror_lid:lid(), maybe_lid()} |
-                       {'process_flag', concuerror_lid:lid(),
-                                    'trap_exit', boolean()} |
-                       {'receive', concuerror_lid:lid(),
-                                    concuerror_lid:lid(), term()} |
-                       {'receive_no_instr', concuerror_lid:lid(), term()} |
-                       {'register', concuerror_lid:lid(),
-                                    atom(), concuerror_lid:lid()} |
-                       {'send', concuerror_lid:lid(), maybe_lid(), term()} |
-                       {'spawn', maybe_lid(), concuerror_lid:lid()} |
-                       {'spawn_link', maybe_lid(), concuerror_lid:lid()} |
-                       {'spawn_monitor', maybe_lid(), concuerror_lid:lid()} |
-                       {'spawn_opt', maybe_lid(),
-                                    concuerror_lid:lid(), spawn_opt_opts()} |
-                       {'unlink', concuerror_lid:lid(), maybe_lid()} |
-                       {'unregister', concuerror_lid:lid(), atom()} |
-                       {'whereis', concuerror_lid:lid(), atom(), maybe_lid()}.
 
 %%%----------------------------------------------------------------------
 %%% User interface
 %%%----------------------------------------------------------------------
 
--spec to_string(proc_action()) -> string().
-
+-spec to_string() -> string().
 to_string({'after', Proc}) ->
     io_lib:format("Process ~s receives no matching messages",
                   [concuerror_lid:to_string(Proc)]);
 to_string({block, Proc}) ->
     io_lib:format("Process ~s blocks", [concuerror_lid:to_string(Proc)]);
-to_string({demonitor, Proc, not_found}) ->
+to_string({{erlang, demonitor _Arity}, Proc, Args, not_found}) ->
     io_lib:format("Process ~s demonitors nonexisting process",
                   [concuerror_lid:to_string(Proc)]);
-to_string({demonitor, Proc1, Proc2}) ->
+to_string({{erlang, demonitor, _Arity}, Proc1, Args, Proc2}) ->
     io_lib:format("Process ~s demonitors process ~s",
                   [concuerror_lid:to_string(Proc1),
                    concuerror_lid:to_string(Proc2)]);
@@ -200,5 +163,7 @@ to_string({whereis, Proc, RegName, RegLid}) ->
     io_lib:format("Process ~s requests the pid of process `~p` (~s)",
                   [concuerror_lid:to_string(Proc), RegName,
                    concuerror_lid:to_string(RegLid)]);
-to_string({CallMsg, Proc, _Args}) ->
-    io_lib:format("Process ~s: ~p", [concuerror_lid:to_string(Proc), CallMsg]).
+%to_string({CallMsg, Proc, _Args}) ->
+%    io_lib:format("Process ~s: ~p", [concuerror_lid:to_string(Proc), CallMsg]);
+to_string(What) ->
+    io_lib:format("~p", [What]).

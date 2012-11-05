@@ -20,6 +20,7 @@
          rep_process_flag/3, rep_generic/3, rep_var/3]).
 
 -include("gen.hrl").
+-include("instr.hrl").
 
 %%%----------------------------------------------------------------------
 %%% Definitions and Types
@@ -28,7 +29,6 @@
 %% Return the calling process' LID.
 -define(LID_FROM_PID(Pid), concuerror_sched:lid_from_pid(Pid)).
 
--define(INSTR_MOD_FUN, []).
 
 %%%----------------------------------------------------------------------
 %%% Callbacks

@@ -18,12 +18,13 @@
 -export_type([macros/0]).
 
 -include("gen.hrl").
+-include("instr.hrl").
 
 %%%----------------------------------------------------------------------
 %%% Debug
 %%%----------------------------------------------------------------------
 
--define(PRINT, true).
+%%-define(PRINT, true).
 -ifdef(PRINT).
 -define(print(S_), io:put_chars(erl_prettypr:format(S_))).
 -else.
@@ -33,71 +34,6 @@
 %%%----------------------------------------------------------------------
 %%% Definitions
 %%%----------------------------------------------------------------------
-
-%% Callback function mapping.
-%% The callback functions should be in `concuerror_rep' module.
-%% Each callback function should take as arguments:
-%%   1: A tupple representing the module, function and arity
-%%   2: A tupple representing the file and the source line
-%%   3: A list with the arguments
-%% For most of the cases rep_generic should be sufficient
--define(INSTR_MOD_FUN,
-    %% Auto-imported functions of 'erlang' module.
-    [{{erlang, demonitor, 1},           rep_generic},
-     {{demonitor, 1},                   rep_generic},
-     {{erlang, demonitor, 2},           rep_generic},
-     {{demonitor, 2},                   rep_generic},
-     {{erlang, halt, 0},                rep_halt},
-     {{halt, 0},                        rep_halt},
-     {{erlang, halt, 1},                rep_halt},
-     {{halt, 1},                        rep_halt},
-     {{erlang, is_process_alive, 1},    rep_generic},
-     {{is_process_alive, 1},            rep_generic},
-     {{erlang, link, 1},                rep_generic},
-     {{link, 1},                        rep_generic},
-     {{erlang, monitor, 2},             rep_generic},
-     {{monitor, 2},                     rep_generic},
-     {{erlang, process_flag, 2},        rep_process_flag},
-     {{process_flag, 2},                rep_process_flag},
-     {{erlang, register, 2},            rep_generic},
-     {{register, 2},                    rep_generic},
-     {{erlang, spawn, 1},               rep_spawn},
-     {{spawn, 1},                       rep_spawn},
-     {{erlang, spawn, 3},               rep_spawn},
-     {{spawn, 3},                       rep_spawn},
-     {{erlang, spawn_link, 1},          rep_spawn},
-     {{spawn_link, 1},                  rep_spawn},
-     {{erlang, spawn_link, 3},          rep_spawn},
-     {{spawn_link, 3},                  rep_spawn},
-     {{erlang, spawn_monitor, 1},       rep_spawn},
-     {{spawn_monitor, 1},               rep_spawn},
-     {{erlang, spawn_monitor, 3},       rep_spawn},
-     {{spawn_monitor, 3},               rep_spawn},
-     {{erlang, spawn_opt, 2},           rep_spawn},
-     {{spawn_opt, 2},                   rep_spawn},
-     {{erlang, spawn_opt, 4},           rep_spawn},
-     {{spawn_opt, 4},                   rep_spawn},
-     {{erlang, unlink, 1},              rep_generic},
-     {{unlink, 1},                      rep_generic},
-     {{erlang, unregister, 1},          rep_generic},
-     {{unregister, 1},                  rep_generic},
-     {{erlang, whereis, 1},             rep_generic},
-     {{whereis, 1},                     rep_generic},
-     {{erlang, send, 2},                rep_send},
-     {{erlang, send, 3},                rep_send},
-    %% Functions from ets module.
-     {{ets, new, 2},                    rep_generic},
-     {{ets, insert_new, 2},             rep_generic},
-     {{ets, lookup, 2},                 rep_generic},
-     {{ets, select_delete, 2},          rep_generic},
-     {{ets, insert, 2},                 rep_generic},
-     {{ets, delete, 1},                 rep_generic},
-     {{ets, delete, 2},                 rep_generic},
-     {{ets, match_object, 1},           rep_generic},
-     {{ets, match_object, 2},           rep_generic},
-     {{ets, match_object, 3},           rep_generic},
-     {{ets, foldl, 3},                  rep_generic}
-    ]).
 
 %% List of attributes that should be stripped.
 -define(ATTR_STRIP, [type, spec, opaque, export_type, import_type]).
@@ -275,8 +211,7 @@ instrument_term(Tree) ->
         _Other -> Tree
     end.
 
-%% Return a tupple (member of ?INSTR_MOD_FUN) for a function call that
-%% is going to be instrumented or 'no_instr' otherwise.
+%% Test if a function call is going to be instrumented
 get_mfa(Tree) ->
     Qualifier = erl_syntax:application_operator(Tree),
     ArgTrees  = erl_syntax:application_arguments(Tree),

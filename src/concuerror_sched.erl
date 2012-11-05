@@ -155,7 +155,7 @@ analyze(Target, Files, Options) ->
                 end;
             error -> {error, instr, {Target, 0}}
         end,
-    concuerror_instr:delete_and_purge(Files),
+%%    concuerror_instr:delete_and_purge(Files),
     Ret.
 
 %% Produce all possible process interleavings of (Mod, Fun, Args).
@@ -479,8 +479,8 @@ handler({_Mod, Spawn, _Arity} = Key, ParentLid,
 %% for logging.
 %% TODO: We may be able to delete some of the above that can be handled
 %%       by this generic handler.
-handler(CallMsg, Lid, #context{actions = Actions}=Context, Args) ->
-    Action = {CallMsg, Lid, Args},
+handler(CallMsg, Lid, #context{actions = Actions}=Context, {Args, Res}) ->
+    Action = {CallMsg, Lid, Args, Res},
     NewActions = [Action | Actions],
     ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
     Context#context{actions = NewActions}.
