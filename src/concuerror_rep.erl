@@ -42,8 +42,26 @@ rep_var(Mod, Fun, Args) ->
         false -> apply(Mod, Fun, Args)
     end.
 
+rep_demonitor(Key, SrcLoc, [_Ref | _Rest]=Args) ->
+    Result = apply(erlang, demonitor, Args),
+    %% TODO: Get LID from Ref?
+    concuerror_sched:notify(Key, {Args, Result}),
+    Result.
+
 rep_halt(Key, SrcLoc, Args) ->
     concuerror_sched:notify(Key, {Args, empty}).
+
+rep_generic_lid({Mod, Fun, _Arity}=Key, SrcLoc, [Pid | Rest]=Args) ->
+    Result = apply(Mod, Fun, Args),
+    Lid = ?LID_FROM_PID(Pid),
+    concuerror_sched:notify(Key, {[Lid | Rest], Result}),
+    Result.
+
+rep_monitor(Key, SrcLoc, [Type, Item]=Args) ->
+    Result = apply(erlang, monitor, Args),
+    Lid = ?LID_FROM_PID(find_pid(Item)),
+    concuerror_sched:notify(Key, {[Type, Lid], Result}),
+    Result.
 
 rep_process_flag(Key, SrcLoc, [trap_exit,Value]=Args) ->
     Result = process_flag(trap_exit, Value),
@@ -52,30 +70,50 @@ rep_process_flag(Key, SrcLoc, [trap_exit,Value]=Args) ->
 rep_process_flag(Key, SrcLoc, [Flag,Value]) ->
     process_flag(Flag, Value).
 
-rep_spawn({Mod, Fun, _Arity}=Key, SrcLoc, Args) ->
-    case ?LID_FROM_PID(self()) of
-        not_found -> apply(Mod, Fun, Args);
-        _Lid ->
-            case Args of
-                [FunArg] ->
-                    Yield = fun() -> concuerror_sched:wait(), FunArg() end,
-                    rep_spawn_aux(Key, SrcLoc, Args, [Yield]);
-                [FunArg, Opts] ->
-                    Yield = fun() -> concuerror_sched:wait(), FunArg() end,
-                    rep_spawn_aux(Key, SrcLoc, Args, [Yield, Opts]);
-                [ModArg, FunArg, ArgArgs] ->
-                    Yield = fun() -> concuerror_sched:wait(), apply(ModArg, FunArg, ArgArgs) end,
-                    rep_spawn_aux(Key, SrcLoc, Args, [Yield]);
-                [ModArg, FunArg, ArgArgs, OptsArg] ->
-                    Yield = fun() -> concuerror_sched:wait(), apply(ModArg, FunArg, ArgArgs) end,
-                    rep_spawn_aux(Key, SrcLoc, Args, [Yield, OptsArg])
-            end
+rep_register(Key, SrcLoc, [RegName, Pid]) ->
+    Result = erlang:register(RegName, Pid),
+    Lid = ?LID_FROM_PID(Pid),
+    concuerror_sched:notify(Key, {[RegName, Lid], Result}),
+    Result.
+
+rep_spawn({_Mod, _Fun, Arity}=Key, SrcLoc, Args) ->
+    case {?LID_FROM_PID(self()), Arity} of
+        {not_found, _} -> apply(Mod, Fun, Args);
+        {_Lid, 1} ->
+            [SpawnFun] = Args,
+            NewSpawnFun =
+                fun() -> concuerror_sched:wait(), SpawnFun() end,
+            rep_spawn_aux(Key, SrcLoc, NewSpawnFun, empty);
+        {_Lid, 2} ->
+            [SpawnFun, Opts] = Args,
+            NewSpawnFun =
+                fun() -> concuerror_sched:wait(), SpawnFun() end,
+            rep_spawn_aux(Key, SrcLoc, NewSpawnFun, Opts);
+        {_Lid, 3} ->
+            [SpawnMod, SpawnFun, SpawnOpts] = Args,
+            NewSpawnFun =
+                fun() -> concuerror_sched:wait(),
+                         apply(SpawnMod, SpawnFun, SpawnOpts)
+                end,
+            rep_spawn_aux(Key, SrcLoc, NewSpawnFun, empty);
+        {_Lid, 4} ->
+            [SpawnMod, SpawnFun, SpawnOpts, Opts] = Args,
+            NewSpawnFun =
+                fun() -> concuerror_sched:wait(),
+                         apply(SpawnMod, SpawnFun, SpawnOpts)
+                end,
+            rep_spawn_aux(Key, SrcLoc, NewSpawnFun, Opts)
     end.
 
-rep_spawn_aux({Mod, Fun, _Arity}=Key, SrcLoc, Args, SpawnArgs) ->
-    Pid = apply(Mod, Fun, SpawnArgs),
-    concuerror_sched:notify(Key, {Args, Pid}),
-    Pid.
+rep_spawn_aux({Mod, Fun, _Arity}=Key, SrcLoc, SpawnFun, Opts) ->
+    Result = apply(Mod, Fun, NewSpawnFun),
+    case Result of
+        {ChildPid, _Ref} ->
+            concuerror_sched:notify(Key, {Opts, ChildPid});
+        ChildPid ->
+            concuerror_sched:notify(Key, {Opts, ChildPid})
+    end,
+    Result.
 
 rep_generic({Mod, Fun, _Arity}=Key, SrcLoc, Args) ->
     Result = apply(Mod, Fun, Args),

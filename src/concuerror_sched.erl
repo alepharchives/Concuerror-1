@@ -465,8 +465,9 @@ handler('receive_no_instr', Lid, #context{actions = Actions}=Context, Msg) ->
 %% Link the newly spawned process to the scheduler process and add it to the
 %% active set.
 handler({_Mod, Spawn, _Arity} = Key, ParentLid,
-        #context{active= Active, actions = Actions} = Context, {Args, ChildPid})
-  when Spawn == spawn; Spawn == spawn_link; Spawn == spawn_monitor; Spawn == spawn_opt ->
+        #context{active= Active, actions = Actions}=Context, {Args, ChildPid})
+  when Spawn == spawn; Spawn == spawn_link;
+       Spawn == spawn_monitor; Spawn == spawn_opt ->
     link(ChildPid),
     ChildLid = concuerror_lid:new(ChildPid, ParentLid),
     Action = {Key, ParentLid, {Args, ChildLid}},
@@ -477,10 +478,8 @@ handler({_Mod, Spawn, _Arity} = Key, ParentLid,
 
 %% Handler for anything "non-special". It just passes the arguments
 %% for logging.
-%% TODO: We may be able to delete some of the above that can be handled
-%%       by this generic handler.
-handler(CallMsg, Lid, #context{actions = Actions}=Context, {Args, Res}) ->
-    Action = {CallMsg, Lid, Args, Res},
+handler(CallMsg, Lid, #context{actions = Actions}=Context, Misc) ->
+    Action = {CallMsg, Lid, Misc},
     NewActions = [Action | Actions],
     ?debug_1(concuerror_proc_action:to_string(Action) ++ "~n"),
     Context#context{actions = NewActions}.
